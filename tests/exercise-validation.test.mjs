@@ -219,6 +219,34 @@ test('step one requires a completed architecture plan', () => {
   assert.doesNotThrow(() => checks['step1-architecture'](root));
 });
 
+test('step one accepts completed bold Markdown decision and approach labels', () => {
+  const root = copyAll();
+  const architecture = path.join(root, 'docs/architecture.md');
+  fs.writeFileSync(architecture, fs.readFileSync(architecture, 'utf8')
+    .replaceAll(/^- (.*(?:decision|approach)):$/gm, '- **$1**: Use the documented contract and preserve tier boundaries.'));
+  assert.doesNotThrow(() => checks['step1-architecture'](root));
+});
+
+test('step one rejects missing or short answers for plain and bold labels', () => {
+  const root = completedFixture();
+  const architecture = path.join(root, 'docs/architecture.md');
+  const completed = fs.readFileSync(architecture, 'utf8');
+  const labels = [...completed.matchAll(/^- (.*(?:decision|approach)):/gm)].map((match) => match[1]);
+  for (const emphasis of ['', '**']) {
+    for (const label of labels) {
+      for (const answer of ['', ' \t', 'short']) {
+        fs.writeFileSync(architecture, completed.replace(
+          new RegExp(`^- ${label}:.*$`, 'm'),
+          `- ${emphasis}${label}${emphasis}: ${answer}`,
+        ));
+        assert.throws(() => checks['step1-architecture'](root), {
+          message: `Architecture plan must complete ${label}`,
+        });
+      }
+    }
+  }
+});
+
 test('data grader rejects placeholder seed script', () => {
   const root = copyAll();
   assert.throws(() => checks['step2-data'](root), /required validation|placeholder/);
