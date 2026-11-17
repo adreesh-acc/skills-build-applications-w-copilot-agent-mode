@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 import { checkFinalComposition, checks, protectedContracts, verifyContracts } from '../.github/scripts/grade-step.mjs';
 import { validateExercise } from '../.github/scripts/validate-exercise.mjs';
 
@@ -425,9 +426,9 @@ test('toolkit references are matched case-insensitively', () => {
   assert.throws(() => validateExercise(checkout), /toolkit checkout must use v0\.9\.3 \(found main\)/);
 
   const reusable = copyMetadata();
-  const reusableWorkflow = path.join(reusable, '.github/workflows/1-step.yml');
+  const reusableWorkflow = path.join(reusable, '.github/workflows/5-last-step.yml');
   const text = fs.readFileSync(reusableWorkflow, 'utf8');
-  const changed = text.replace('skills/exercise-toolkit/.github/workflows/find-exercise-issue.yml@v0.9.3', 'Skills/Exercise-Toolkit/.github/workflows/find-exercise-issue.yml@main');
+  const changed = text.replace('skills/exercise-toolkit/.github/workflows/finish-exercise.yml@v0.9.3', 'Skills/Exercise-Toolkit/.github/workflows/finish-exercise.yml@main');
   assert.notEqual(changed, text);
   fs.writeFileSync(reusableWorkflow, changed);
   assert.throws(() => validateExercise(reusable), /uses toolkit main/);
@@ -442,5 +443,68 @@ test('block scalar headers accept either indicator order', () => {
     assert.notEqual(changed, text);
     fs.writeFileSync(workflow, changed);
     assert.doesNotThrow(() => validateExercise(root), header);
+  }
+});
+
+async function findExercise(responses) {
+  const workflow = fs.readFileSync(path.join(repositoryRoot, '.github/workflows/find-exercise-issue.yml'), 'utf8');
+  const script = workflow.match(/          script: \|\n([\s\S]*)$/)[1].replace(/^ {12}/gm, '');
+  const outputs = {};
+  const failures = [];
+  let calls = 0;
+  let waits = 0;
+  const listForRepo = () => {};
+  await runInNewContext(`(async () => {\n${script}\n})()`, {
+    github: {
+      rest: { issues: { listForRepo } },
+      paginate: async (method, options) => {
+        assert.equal(method, listForRepo);
+        assert.equal(options.owner, 'owner');
+        assert.equal(options.repo, 'repo');
+        assert.equal(options.state, 'all');
+        calls += 1;
+        assert.ok(responses.length, 'lookup must stop after its retry limit');
+        return responses.shift();
+      },
+    },
+    context: { repo: { owner: 'owner', repo: 'repo' } },
+    core: {
+      info: () => {},
+      setOutput: (name, value) => { outputs[name] = value; },
+      setFailed: (message) => { failures.push(message); },
+    },
+    setTimeout: (callback, delay) => { assert.equal(delay, 5000); waits += 1; callback(); },
+  });
+  return { outputs, failures, calls, waits };
+}
+
+const exerciseIssue = { number: 7, title: 'Exercise: Build and test a multi-tier application with GitHub Copilot', html_url: 'https://github.com/owner/repo/issues/7', state: 'closed' };
+
+test('exercise lookup uses pagination, ignores pull requests, and accepts closed issues', async () => {
+  const result = await findExercise([[
+    { ...exerciseIssue, number: 8, pull_request: {} },
+    { number: 9, title: 'Unrelated issue' },
+    exerciseIssue,
+  ]]);
+  assert.deepEqual(result, { outputs: { 'issue-number': 7, 'issue-url': exerciseIssue.html_url }, failures: [], calls: 1, waits: 0 });
+});
+
+test('exercise lookup retries empty results before publishing outputs', async () => {
+  const result = await findExercise([[], [], [exerciseIssue]]);
+  assert.deepEqual(result, { outputs: { 'issue-number': 7, 'issue-url': exerciseIssue.html_url }, failures: [], calls: 3, waits: 2 });
+});
+
+test('exercise lookup fails after bounded retries without publishing an issue', async () => {
+  const result = await findExercise([[], [{ number: 9, title: 'Unrelated issue' }], []]);
+  assert.deepEqual(result.outputs, {});
+  assert.equal(result.calls, 3);
+  assert.equal(result.waits, 2);
+  assert.match(result.failures[0], /No exercise issue found after 3 attempts/);
+});
+
+test('all exercise steps use the shared resilient issue lookup', () => {
+  for (const file of ['1-step.yml', '2-step.yml', '3-step.yml', '4-step.yml', '5-last-step.yml']) {
+    const workflow = fs.readFileSync(path.join(repositoryRoot, '.github/workflows', file), 'utf8');
+    assert.match(workflow, /uses: \.\/\.github\/workflows\/find-exercise-issue\.yml/);
   }
 });

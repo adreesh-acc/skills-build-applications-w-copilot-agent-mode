@@ -1,0 +1,51 @@
+name: Find Exercise Issue
+
+on:
+  workflow_call:
+    outputs:
+      issue-url:
+        description: URL of the found issue
+        value: ${{ jobs.find_exercise.outputs.issue-url }}
+      issue-number:
+        description: Number of the found issue
+        value: ${{ jobs.find_exercise.outputs.issue-number }}
+
+permissions: {}
+
+jobs:
+  find_exercise:
+    name: Find exercise by issue title
+    runs-on: ubuntu-latest
+    permissions:
+      issues: read
+    outputs:
+      issue-url: ${{ steps.find-exercise-issue.outputs.issue-url }}
+      issue-number: ${{ steps.find-exercise-issue.outputs.issue-number }}
+    steps:
+      - id: find-exercise-issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const attempts = 3;
+            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+              const issues = await github.paginate(github.rest.issues.listForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'all',
+                sort: 'created',
+                direction: 'desc',
+                per_page: 100
+              });
+              const issue = issues.find(item => !item.pull_request && item.title.includes('Exercise'));
+              if (issue) {
+                core.info(`Exercise issue found: #${issue.number} (${issue.html_url})`);
+                core.setOutput('issue-url', issue.html_url);
+                core.setOutput('issue-number', issue.number);
+                return;
+              }
+              core.info(`No exercise issue found on attempt ${attempt}/${attempts}.`);
+              if (attempt < attempts) {
+                await new Promise(resolve => setTimeout(resolve, 5000));
+              }
+            }
+            core.setFailed('No exercise issue found after 3 attempts. Ensure this repository has an issue with "Exercise" in its title (created by Step 0).');
