@@ -20,7 +20,7 @@ jobs:
     name: Find Exercise Issue
     permissions:
       issues: read
-    uses: skills/exercise-toolkit/.github/workflows/find-exercise-issue.yml@v0.9.3
+    uses: ./.github/workflows/find-exercise-issue.yml
 
   check_step_work:
     name: Check step work
